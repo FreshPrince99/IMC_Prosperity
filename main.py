@@ -1,4 +1,5 @@
 import json
+import jsonpickle
 from typing import Dict, List, Any
 from datamodel import  Listing, Observation, ProsperityEncoder, Symbol, OrderDepth, TradingState, Order, Trade
 
@@ -127,12 +128,17 @@ class Trader:
         """
         # Initialize the method output dict as an empty dict
         result = {}
-        acceptable_values = {
-            "RAINFOREST_RESIN": 10000,
-            "KELP": 5000
-        }
         state_position = state.position
         limit = 50 # pre defined position limits for these products
+        conversions = 0
+
+        # == Setup traderData ==
+        if state.traderData:
+            data = jsonpickle.decode(state.traderData)
+        else:
+            data = {"kelp_prices": []}
+        
+        new_trader_data = data.copy()
 
         # Iterate over all the keys (the available products) contained in the order dephts
         for product in state.order_depths.keys():
@@ -142,34 +148,54 @@ class Trader:
 
             # Retrieve the Order Depth containing all the market BUY and SELL orders
             order_depth: OrderDepth = state.order_depths[product]
-            acceptable_price = acceptable_values[product]
             position = state_position.get(product, 0)
-
             available_buy = limit - position
             available_sell = limit + position
 
+            # Mid price (if available)
+            if order_depth.buy_orders and order_depth.sell_orders:
+                best_bid = max(order_depth.buy_orders.keys())
+                best_ask = min(order_depth.sell_orders.keys())
+                mid_price = (best_bid + best_ask)/2
+            else:
+                continue # Skip if no market info (first iteration)
+
+            # === KELP STRATEGY (Moving Average) === 
+            if product == 'KELP':
+                price_history = data.get("kelp_prices", [])
+                price_history.append(mid_price)
+                if len(price_history) > 20: # this is a cap on the moving average strategy so that it keeps updating the market value
+                    price_history.pop(0)
+
+                fair_price = sum(price_history) / len(price_history)
+                new_trader_data["kelp_prices"] = price_history
+            
+            else:
+                # === RAINFOREST_RESIN simple-spread based strategy ====
+                fair_price = 10000 # Can be improved later
+            
+            logger.print(f"{product} - Position: {position}, Fair price: {fair_price:.2f}")
+
             # BUY if sell order is below fair value
-            for best_ask, best_ask_qty in sorted(order_depth.sell_orders.items()):
-                if best_ask < acceptable_price and available_buy > 0:
-                    qty = min(-best_ask_qty, available_buy)
-                    logger.print("BUY", str(-best_ask_qty) + "x", best_ask)
-                    orders.append(Order(product, best_ask, -qty))
+            for ask_price, ask_qty in sorted(order_depth.sell_orders.items()):
+                if ask_price < fair_price and available_buy > 0:
+                    qty = min(-ask_qty, available_buy)
+                    logger.print("BUY", str(qty) + "x", ask_price)
+                    orders.append(Order(product, ask_price, qty))
                     available_buy-= qty
             
             # SELL if buy order is above fair value
-            for best_bid, best_bid_qty in sorted(order_depth.buy_orders.items()):
-                if best_bid > acceptable_price and available_sell > 0:
-                    qty = min(best_bid_qty, available_sell)
-                    logger.print("SELL", str(best_bid_qty) + "x", best_bid)
-                    orders.append(Order(product, best_bid, best_bid_qty))
+            for bid_price, bid_qty in sorted(order_depth.buy_orders.items()):
+                if bid_price > fair_price and available_sell > 0:
+                    qty = min(bid_qty, available_sell)
+                    logger.print("SELL", str(qty) + "x", bid_price)
+                    orders.append(Order(product, bid_price, -qty))
                     available_sell-=qty
 
             # Add all the above the orders to the result dict
             result[product] = orders
         
-        # This has to be modified
-        conversions = 0
-        trader_data=''
+        trader_data=jsonpickle.encode(new_trader_data)
 
         logger.flush(state, result, conversions, trader_data)
         return result, conversions, trader_data
