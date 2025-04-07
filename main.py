@@ -3,6 +3,12 @@ import jsonpickle
 from typing import Dict, List, Any
 from datamodel import  Listing, Observation, ProsperityEncoder, Symbol, OrderDepth, TradingState, Order, Trade
 
+PRODUCTS = {
+    "KELP": {"use_ma": True},
+    "SQUID_INK": {"use_ma": True},
+    "RAINFOREST_RESIN": {"use_ma": False, "fair_price": 10000}
+}
+
 class Logger:
     def __init__(self) -> None:
         self.logs = ""
@@ -136,91 +142,75 @@ class Trader:
         if state.traderData:
             data = jsonpickle.decode(state.traderData)
         else:
-            data = {"kelp_prices": []}
+            data = {"kelp_prices": [],
+                    "squid_ink_prices": []}
         
         new_trader_data = data.copy()
 
         # Iterate over all the keys (the available products) contained in the order depths
+
         for product in state.order_depths.keys():
+            if product not in PRODUCTS:
+                continue
 
-            # Initialize the list of Orders to be sent as an empty list
             orders: list[Order] = []
-
-            # Retrieve the Order Depth containing all the market BUY and SELL orders
             order_depth: OrderDepth = state.order_depths[product]
             position = state_position.get(product, 0)
             available_buy = limit - position
             available_sell = limit + position
 
-            # Mid price (if available)
-            if order_depth.buy_orders and order_depth.sell_orders:
-                best_bid = max(order_depth.buy_orders.keys())
-                best_ask = min(order_depth.sell_orders.keys())
-                mid_price = (best_bid + best_ask)/2
-            else:
-                continue # Skip if no market info (first iteration)
+            if not order_depth.buy_orders or not order_depth.sell_orders:
+                continue
 
-            # === KELP STRATEGY (Moving Average using fast and slow avg) === 
-            if product == 'KELP':
-                price_history = data.get("kelp_prices", [])
+            best_bid = max(order_depth.buy_orders.keys())
+            best_ask = min(order_depth.sell_orders.keys())
+            mid_price = (best_bid + best_ask) / 2
+
+            # Moving average logic
+            if PRODUCTS[product].get("use_ma"):
+                key = f"{product.lower()}_prices"
+                price_history = data.get(key, [])
                 price_history.append(mid_price)
-                if len(price_history) > 50: # this is a cap on the moving average strategy so that it keeps updating the market value
+                if len(price_history) > 50:
                     price_history.pop(0)
+                new_trader_data[key] = price_history
 
-                new_trader_data["kelp_prices"] = price_history
+                fair_price, trending_up, trending_down = self.get_moving_average(price_history)
+                logger.print(f"{product} Trend: {'UP' if trending_up else 'DOWN' if trending_down else 'FLAT'}")
 
-                # Trend detection with moving averages
-                fast_window = 5
-                slow_window = 20
-                fast_ma, slow_ma = 0, 0
-
-                if len(price_history) >= slow_window:
-                    fast_ma = sum(price_history[-fast_window:]) / fast_window # takes latest value of price_history
-                    slow_ma = sum(price_history[-slow_window:]) / slow_window
-                    fair_price = slow_ma
-
-                    trending_up = fast_ma > slow_ma
-                    trending_down = fast_ma < slow_ma
-
-                    logger.print(f"KELP Trend: {'UP' if trending_up else 'DOWN' if trending_down else 'FLAT'}")
-                
-                else:
-                    fair_price = mid_price
-                    trending_up = trending_down = False
-            
             else:
-                # === RAINFOREST_RESIN simple-spread based strategy ====
-                fair_price = 10000 # Can be improved later
-                trending_up = trending_down = True
-            
-            if product == 'KELP':
-                logger.print(f"KELP Fair: {fair_price:.2f}, FastMA: {fast_ma:.2f}, SlowMA: {slow_ma:.2f}")
-            else:
-                logger.print(f"{product} - Fixed Fair price: {fair_price}")
+                fair_price = PRODUCTS[product]["fair_price"]
+                trending_up = trending_down = True  # Always trade
 
+            logger.print(f"{product} - Position: {position}, Fair price: {fair_price:.2f}")
 
-            # BUY if sell order is below fair value
+            # === Trading ===
             for ask_price, ask_qty in sorted(order_depth.sell_orders.items()):
                 if ask_price < fair_price and available_buy > 0:
-                    if (product == 'KELP' and trending_up) or product != 'KELP':
+                    if (product in ['KELP', 'SQUID_INK'] and trending_up) or product == 'RAINFOREST_RESIN':
                         qty = min(-ask_qty, available_buy)
-                        logger.print("BUY", str(qty) + "x", ask_price)
                         orders.append(Order(product, ask_price, qty))
-                        available_buy-= qty
-            
-            # SELL if buy order is above fair value
+                        available_buy -= qty
+
             for bid_price, bid_qty in sorted(order_depth.buy_orders.items()):
                 if bid_price > fair_price and available_sell > 0:
-                    if (product == 'KELP' and trending_down) or product != 'KELP':
+                    if (product in ['KELP', 'SQUID_INK'] and trending_down) or product == 'RAINFOREST_RESIN':
                         qty = min(bid_qty, available_sell)
-                        logger.print("SELL", str(qty) + "x", bid_price)
                         orders.append(Order(product, bid_price, -qty))
-                        available_sell-=qty
+                        available_sell -= qty
 
-            # Add all the above the orders to the result dict
             result[product] = orders
         
         trader_data=jsonpickle.encode(new_trader_data)
 
         logger.flush(state, result, conversions, trader_data)
         return result, conversions, trader_data
+    
+    def get_moving_average(self, price_history: List[float], fast_window: int = 5, slow_window: int = 20):
+        if len(price_history) >= slow_window:
+            fast_ma = sum(price_history[-fast_window:]) / fast_window
+            slow_ma = sum(price_history[-slow_window:]) / slow_window
+            fair_price = slow_ma
+            return fair_price, fast_ma > slow_ma, fast_ma < slow_ma
+        else:
+            return price_history[-1], False, False
