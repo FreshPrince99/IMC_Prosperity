@@ -128,26 +128,17 @@ logger = Logger()
 class Trader:
 
     def run(self, state: TradingState) -> Dict[str, List[Order]]:
-        """
-        Only method required. It takes all buy and sell orders for all symbols as an input,
-        and outputs a list of orders to be sent
-        """
-        # Initialize the method output dict as an empty dict
         result = {}
         state_position = state.position
-        limit = 50 # pre defined position limits for these products
+        limit = 50
         conversions = 0
 
-        # == Setup traderData ==
         if state.traderData:
             data = jsonpickle.decode(state.traderData)
         else:
-            data = {"kelp_prices": [],
-                    "squid_ink_prices": []}
-        
-        new_trader_data = data.copy()
+            data = {"kelp_prices": [], "squid_ink_prices": []}
 
-        # Iterate over all the keys (the available products) contained in the order depths
+        new_trader_data = data.copy()
 
         for product in state.order_depths.keys():
             if product not in PRODUCTS:
@@ -166,45 +157,73 @@ class Trader:
             best_ask = min(order_depth.sell_orders.keys())
             mid_price = (best_bid + best_ask) / 2
 
-            # Moving average logic
-            if PRODUCTS[product].get("use_ma"):
-                key = f"{product.lower()}_prices"
-                price_history = data.get(key, [])
-                price_history.append(mid_price)
-                if len(price_history) > 50:
-                    price_history.pop(0)
-                new_trader_data[key] = price_history
+            price_key = f"{product.lower()}_prices"
+            price_history = data.get(price_key, [])
+            price_history.append(mid_price)
+            if len(price_history) > 50:
+                price_history.pop(0)
+            new_trader_data[price_key] = price_history
 
+            if product == "SQUID_INK":
+                # === Mean Reversion Strategy ===
+                fair_price, buy_signal, sell_signal = self.mean_reversion_signal(price_history)
+                logger.print(f"{product} Reversion Fair: {fair_price:.2f}, Buy: {buy_signal}, Sell: {sell_signal}")
+
+                if buy_signal and available_buy > 0:
+                    qty = min(10, available_buy)
+                    logger.print("BUY", str(qty) + "x", mid_price)
+                    orders.append(Order(product, int(mid_price), qty))
+                    available_buy -= qty
+
+                elif sell_signal and available_sell > 0:
+                    qty = min(10, available_sell)
+                    logger.print("SELL", str(qty) + "x", mid_price)
+                    orders.append(Order(product, int(mid_price), -qty))
+                    available_sell -= qty
+
+            elif product == "KELP":
+                # === Moving Average Strategy ===
                 fair_price, trending_up, trending_down = self.get_moving_average(price_history)
                 logger.print(f"{product} Trend: {'UP' if trending_up else 'DOWN' if trending_down else 'FLAT'}")
 
-            else:
-                fair_price = PRODUCTS[product]["fair_price"]
-                trending_up = trending_down = True  # Always trade
-
-            logger.print(f"{product} - Position: {position}, Fair price: {fair_price:.2f}")
-
-            # === Trading ===
-            for ask_price, ask_qty in sorted(order_depth.sell_orders.items()):
-                if ask_price < fair_price and available_buy > 0:
-                    if (product in ['KELP', 'SQUID_INK'] and trending_up) or product == 'RAINFOREST_RESIN':
+                for ask_price, ask_qty in sorted(order_depth.sell_orders.items()):
+                    if ask_price < fair_price and trending_up and available_buy > 0:
                         qty = min(-ask_qty, available_buy)
+                        logger.print("BUY", str(qty) + "x", ask_price)
                         orders.append(Order(product, ask_price, qty))
                         available_buy -= qty
 
-            for bid_price, bid_qty in sorted(order_depth.buy_orders.items()):
-                if bid_price > fair_price and available_sell > 0:
-                    if (product in ['KELP', 'SQUID_INK'] and trending_down) or product == 'RAINFOREST_RESIN':
+                for bid_price, bid_qty in sorted(order_depth.buy_orders.items()):
+                    if bid_price > fair_price and trending_down and available_sell > 0:
                         qty = min(bid_qty, available_sell)
+                        logger.print("SELL", str(qty) + "x", bid_price)
+                        orders.append(Order(product, bid_price, -qty))
+                        available_sell -= qty
+
+            elif product == "RAINFOREST_RESIN":
+                fair_price = PRODUCTS[product]["fair_price"]
+                logger.print(f"{product} Static fair price: {fair_price}")
+
+                for ask_price, ask_qty in sorted(order_depth.sell_orders.items()):
+                    if ask_price < fair_price and available_buy > 0:
+                        qty = min(-ask_qty, available_buy)
+                        logger.print("BUY", str(qty) + "x", ask_price)
+                        orders.append(Order(product, ask_price, qty))
+                        available_buy -= qty
+
+                for bid_price, bid_qty in sorted(order_depth.buy_orders.items()):
+                    if bid_price > fair_price and available_sell > 0:
+                        qty = min(bid_qty, available_sell)
+                        logger.print("SELL", str(qty) + "x", bid_price)
                         orders.append(Order(product, bid_price, -qty))
                         available_sell -= qty
 
             result[product] = orders
-        
-        trader_data=jsonpickle.encode(new_trader_data)
 
+        trader_data = jsonpickle.encode(new_trader_data)
         logger.flush(state, result, conversions, trader_data)
         return result, conversions, trader_data
+
     
     def get_moving_average(self, price_history: List[float], fast_window: int = 5, slow_window: int = 20):
         if len(price_history) >= slow_window:
@@ -214,3 +233,23 @@ class Trader:
             return fair_price, fast_ma > slow_ma, fast_ma < slow_ma
         else:
             return price_history[-1], False, False
+    
+    def mean_reversion_signal(self, price_history: List[float]):
+        if len(price_history) < 30:
+            return price_history[-1], False, False  # use last price as fallback
+
+        window = 30
+        prices = price_history[-window:]
+        mean_price = sum(prices) / window
+        std_dev = (sum((p - mean_price) ** 2 for p in prices) / window) ** 0.5
+
+        upper_band = mean_price + 2 * std_dev
+        lower_band = mean_price - 2 * std_dev
+
+        current_price = prices[-1]
+        buy_signal = current_price < lower_band
+        sell_signal = current_price > upper_band
+
+        return mean_price, buy_signal, sell_signal
+
+
