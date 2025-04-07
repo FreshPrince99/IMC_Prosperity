@@ -140,7 +140,7 @@ class Trader:
         
         new_trader_data = data.copy()
 
-        # Iterate over all the keys (the available products) contained in the order dephts
+        # Iterate over all the keys (the available products) contained in the order depths
         for product in state.order_depths.keys():
 
             # Initialize the list of Orders to be sent as an empty list
@@ -160,37 +160,62 @@ class Trader:
             else:
                 continue # Skip if no market info (first iteration)
 
-            # === KELP STRATEGY (Moving Average) === 
+            # === KELP STRATEGY (Moving Average using fast and slow avg) === 
             if product == 'KELP':
                 price_history = data.get("kelp_prices", [])
                 price_history.append(mid_price)
-                if len(price_history) > 20: # this is a cap on the moving average strategy so that it keeps updating the market value
+                if len(price_history) > 50: # this is a cap on the moving average strategy so that it keeps updating the market value
                     price_history.pop(0)
 
-                fair_price = sum(price_history) / len(price_history)
                 new_trader_data["kelp_prices"] = price_history
+
+                # Trend detection with moving averages
+                fast_window = 5
+                slow_window = 20
+                fast_ma, slow_ma = 0, 0
+
+                if len(price_history) >= slow_window:
+                    fast_ma = sum(price_history[-fast_window:]) / fast_window # takes latest value of price_history
+                    slow_ma = sum(price_history[-slow_window:]) / slow_window
+                    fair_price = slow_ma
+
+                    trending_up = fast_ma > slow_ma
+                    trending_down = fast_ma < slow_ma
+
+                    logger.print(f"KELP Trend: {'UP' if trending_up else 'DOWN' if trending_down else 'FLAT'}")
+                
+                else:
+                    fair_price = mid_price
+                    trending_up = trending_down = False
             
             else:
                 # === RAINFOREST_RESIN simple-spread based strategy ====
                 fair_price = 10000 # Can be improved later
+                trending_up = trending_down = True
             
-            logger.print(f"{product} - Position: {position}, Fair price: {fair_price:.2f}")
+            if product == 'KELP':
+                logger.print(f"KELP Fair: {fair_price:.2f}, FastMA: {fast_ma:.2f}, SlowMA: {slow_ma:.2f}")
+            else:
+                logger.print(f"{product} - Fixed Fair price: {fair_price}")
+
 
             # BUY if sell order is below fair value
             for ask_price, ask_qty in sorted(order_depth.sell_orders.items()):
                 if ask_price < fair_price and available_buy > 0:
-                    qty = min(-ask_qty, available_buy)
-                    logger.print("BUY", str(qty) + "x", ask_price)
-                    orders.append(Order(product, ask_price, qty))
-                    available_buy-= qty
+                    if (product == 'KELP' and trending_up) or product != 'KELP':
+                        qty = min(-ask_qty, available_buy)
+                        logger.print("BUY", str(qty) + "x", ask_price)
+                        orders.append(Order(product, ask_price, qty))
+                        available_buy-= qty
             
             # SELL if buy order is above fair value
             for bid_price, bid_qty in sorted(order_depth.buy_orders.items()):
                 if bid_price > fair_price and available_sell > 0:
-                    qty = min(bid_qty, available_sell)
-                    logger.print("SELL", str(qty) + "x", bid_price)
-                    orders.append(Order(product, bid_price, -qty))
-                    available_sell-=qty
+                    if (product == 'KELP' and trending_down) or product != 'KELP':
+                        qty = min(bid_qty, available_sell)
+                        logger.print("SELL", str(qty) + "x", bid_price)
+                        orders.append(Order(product, bid_price, -qty))
+                        available_sell-=qty
 
             # Add all the above the orders to the result dict
             result[product] = orders
