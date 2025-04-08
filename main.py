@@ -166,7 +166,7 @@ class Trader:
 
             if product == "SQUID_INK":
                 # === Mean Reversion Strategy ===
-                fair_price, buy_signal, sell_signal = self.mean_reversion_signal(price_history)
+                fair_price, buy_signal, sell_signal = self.mean_reversion_signal(price_history, std_multiplier=2.0)
                 logger.print(f"{product} Reversion Fair: {fair_price:.2f}, Buy: {buy_signal}, Sell: {sell_signal}")
 
                 if buy_signal and available_buy > 0:
@@ -201,22 +201,23 @@ class Trader:
                         available_sell -= qty
 
             elif product == "RAINFOREST_RESIN":
-                fair_price = PRODUCTS[product]["fair_price"]
-                logger.print(f"{product} Static fair price: {fair_price}")
 
-                for ask_price, ask_qty in sorted(order_depth.sell_orders.items()):
-                    if ask_price < fair_price and available_buy > 0:
-                        qty = min(-ask_qty, available_buy)
-                        logger.print("BUY", str(qty) + "x", ask_price)
-                        orders.append(Order(product, ask_price, qty))
-                        available_buy -= qty
+                buy_price = 9998
+                sell_price = 10002
+                orders = []
 
-                for bid_price, bid_qty in sorted(order_depth.buy_orders.items()):
-                    if bid_price > fair_price and available_sell > 0:
-                        qty = min(bid_qty, available_sell)
-                        logger.print("SELL", str(qty) + "x", bid_price)
-                        orders.append(Order(product, bid_price, -qty))
-                        available_sell -= qty
+                # Place a passive BUY limit order at 9999
+                if available_buy > 0:
+                    qty = min(5, available_buy)  # You can change 5 to any order size you prefer
+                    logger.print("Placing passive BUY at", buy_price, "for", qty)
+                    orders.append(Order(product, buy_price, qty))
+
+                # Place a passive SELL limit order at 10001
+                if available_sell > 0:
+                    qty = min(5, available_sell)
+                    logger.print("Placing passive SELL at", sell_price, "for", qty)
+                    orders.append(Order(product, sell_price, -qty))
+                    
 
             result[product] = orders
 
@@ -234,22 +235,23 @@ class Trader:
         else:
             return price_history[-1], False, False
     
-    def mean_reversion_signal(self, price_history: List[float]):
+    def mean_reversion_signal(self, price_history: List[float], std_multiplier: float = 2.0):
         if len(price_history) < 30:
-            return price_history[-1], False, False  # use last price as fallback
+            return price_history[-1], False, False  # fallback
 
         window = 30
         prices = price_history[-window:]
         mean_price = sum(prices) / window
         std_dev = (sum((p - mean_price) ** 2 for p in prices) / window) ** 0.5
 
-        upper_band = mean_price + 2 * std_dev
-        lower_band = mean_price - 2 * std_dev
+        upper_band = mean_price + std_multiplier * std_dev
+        lower_band = mean_price - std_multiplier * std_dev
 
         current_price = prices[-1]
         buy_signal = current_price < lower_band
         sell_signal = current_price > upper_band
 
         return mean_price, buy_signal, sell_signal
+
 
 
