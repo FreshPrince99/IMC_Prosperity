@@ -208,13 +208,13 @@ class Trader:
 
                 # Place a passive BUY limit order at 9999
                 if available_buy > 0:
-                    qty = min(5, available_buy)  # You can change 5 to any order size you prefer
+                    qty = min(50, available_buy)  # You can change 5 to any order size you prefer
                     logger.print("Placing passive BUY at", buy_price, "for", qty)
                     orders.append(Order(product, buy_price, qty))
 
                 # Place a passive SELL limit order at 10001
                 if available_sell > 0:
-                    qty = min(5, available_sell)
+                    qty = min(50, available_sell)
                     logger.print("Placing passive SELL at", sell_price, "for", qty)
                     orders.append(Order(product, sell_price, -qty))
                     
