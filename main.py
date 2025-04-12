@@ -191,7 +191,7 @@ PARAMS = {
         "disregard_edge": 1,
         "join_edge": 1,
         "default_edge": 1,
-        "soft_position_limit": 50
+        "soft_position_limit": 240
     },
     Product.JAMS: {
         "take_width": 1,
@@ -199,24 +199,23 @@ PARAMS = {
         "disregard_edge": 1,
         "join_edge": 1,
         "default_edge": 1,
-        "soft_position_limit": 50
+        "soft_position_limit": 340
     },
     Product.PICNIC_BASKET_1: {
         "disregard_edge": 1,
         "join_edge": 1,
         "default_edge": 1,
         "components": {Product.DJEMBES: 1, Product.CROISSANTS: 6, Product.JAMS: 3},
-        "soft_position_limit": 50
+        "soft_position_limit": 55
     },
     Product.PICNIC_BASKET_2: {
         "disregard_edge": 1,
         "join_edge": 1,
         "default_edge": 1,
         "components": {Product.CROISSANTS: 4, Product.JAMS: 2},
-        "soft_position_limit": 50
+        "soft_position_limit": 90
     }
     
-
 }
 
 # == Trader Class === 
@@ -231,11 +230,11 @@ class Trader:
         self.PRODUCT_LIMIT = {Product.RAINFOREST_RESIN: 50,
                               Product.KELP: 50,
                               Product.SQUID_INK: 50,
-                              Product.DJEMBES: 50,
-                              Product.CROISSANTS: 50,
-                              Product.JAMS: 50,
-                              Product.PICNIC_BASKET_1: 50,
-                              Product.PICNIC_BASKET_2: 50
+                              Product.DJEMBES: 60,
+                              Product.CROISSANTS: 250,
+                              Product.JAMS: 350,
+                              Product.PICNIC_BASKET_1: 60,
+                              Product.PICNIC_BASKET_2: 100
                               }
 
     def take_best_orders(self, product: str,
